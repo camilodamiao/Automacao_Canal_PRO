@@ -10,6 +10,8 @@ from datetime import datetime
 import json
 import sys
 import requests
+import os
+import asyncio
 from pathlib import Path
 
 # Adicionar src ao path
@@ -51,204 +53,400 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def mapear_tipo_imovel(tipo):
+    """Mapeia tipos do scraping para o Canal PRO"""
+    mapeamento = {
+        'Apartamento': 'APARTMENT',
+        'Casa': 'HOME',
+        'Terreno': 'ALLOTMENT_LAND',
+        'Comercial': 'BUILDING'
+    }
+    return mapeamento.get(tipo, 'APARTMENT')
+
+def mapear_iptu_periodo(periodo):
+    """Mapeia período IPTU para o Canal PRO"""
+    if not periodo:
+        return 'YEARLY'
+    if 'Mensal' in str(periodo):
+        return 'MONTHLY'
+    elif 'Anual' in str(periodo):
+        return 'YEARLY'
+    return 'YEARLY'  # Padrão
+
+import subprocess
+import sys
+import json
+import tempfile
+import os
+from pathlib import Path
+
+import subprocess
+import sys
+import json
+import tempfile
+import os
+from pathlib import Path
+
 def executar_teste_canal_pro(dados_completos):
-    """Executa teste de preenchimento no Canal PRO (browser visível)"""
+    """Executa teste usando subprocess separado para evitar conflitos com Streamlit"""
     try:
-        import asyncio
-        from playwright.async_api import async_playwright
+        # Criar arquivo temporário com os dados (CORREÇÃO: encoding UTF-8)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as temp_file:
+            json.dump(dados_completos, temp_file, ensure_ascii=False, indent=2)
+            temp_path = temp_file.name
         
-        def mapear_tipo_imovel(tipo):
-            """Mapeia tipos do scraping para o Canal PRO"""
-            mapeamento = {
-                'Apartamento': 'APARTMENT',
-                'Casa': 'HOME',
-                'Terreno': 'ALLOTMENT_LAND',
-                'Comercial': 'BUILDING'
-            }
-            return mapeamento.get(tipo, 'APARTMENT')
+        # Caminho do script executor
+        script_executor = Path(__file__).parent.parent / "src" / "automation" / "canal_pro_test_executor.py"
         
-        def mapear_iptu_periodo(periodo):
-            """Mapeia período IPTU para o Canal PRO"""
-            if periodo and 'Mensal' in periodo:
-                return 'MONTHLY'
-            elif periodo and 'Anual' in periodo:
-                return 'YEARLY'
-            return 'YEARLY'  # Padrão
+        # Se o script não existir, criar
+        if not script_executor.exists():
+            criar_script_executor(script_executor)
         
-        async def preencher_canal_pro():
-            async with async_playwright() as p:
-                # Lançar browser em modo visível
-                browser = await p.chromium.launch(
-                    headless=False,
-                    slow_mo=1000,
-                    args=['--start-maximized']
-                )
+        st.info("🚀 Executando teste em processo separado...")
+        st.info("📱 Um browser será aberto automaticamente")
+        
+        # Executar em subprocess separado (CORREÇÃO: definir encoding)
+        try:
+            # Definir variáveis de ambiente para encoding
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'
+            
+            result = subprocess.run([
+                sys.executable,  # Python atual
+                str(script_executor),
+                temp_path
+            ], 
+            capture_output=True, 
+            text=True, 
+            timeout=300,  # 5 minutos de timeout
+            cwd=Path(__file__).parent.parent,  # Diretório raiz do projeto
+            env=env,  # Usar ambiente com encoding correto
+            encoding='utf-8',  # Forçar UTF-8
+            errors='replace'  # Substituir caracteres problemáticos
+            )
+            
+            # Processar resultado
+            if result.returncode == 0:
+                st.success("✅ Teste executado com sucesso!")
+                if result.stdout:
+                    st.text("📋 Log do teste:")
+                    st.text(result.stdout)
+                return True
+            else:
+                st.error("❌ Erro durante execução do teste")
+                if result.stderr:
+                    st.error("Detalhes do erro:")
+                    st.text(result.stderr)
+                return False
                 
-                context = await browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    locale='pt-BR',
-                    timezone_id='America/Sao_Paulo'
-                )
-                page = await context.new_page()
+        except subprocess.TimeoutExpired:
+            st.warning("⏰ Teste excedeu tempo limite (5 minutos)")
+            return False
+        except Exception as e:
+            st.error(f"❌ Erro ao executar subprocess: {e}")
+            return False
+        finally:
+            # Limpar arquivo temporário
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
                 
-                try:
-                    st.write("🔐 Fazendo login no Canal PRO...")
-                    
-                    # 1. Acessar Canal PRO e fechar cookies
-                    await page.goto('https://canalpro.grupozap.com', wait_until='networkidle')
-                    
-                    # Fechar popup de cookies
-                    try:
-                        await page.click('button:has-text("Aceitar")', timeout=3000)
-                    except:
-                        pass
-                    
-                    # 2. Fazer login
-                    await page.get_by_role("textbox", name="Digite seu e-mail").fill(os.getenv('ZAP_EMAIL', ''))
-                    await page.get_by_role("textbox", name="Digite sua senha").fill(os.getenv('ZAP_PASSWORD', ''))
-                    await page.get_by_role("button", name="Entrar").click()
-                    
-                    # 3. Aguardar confirmação de login
-                    st.write("⏳ Aguardando confirmação de login...")
-                    await page.wait_for_url("**/ZAP_OLX/**", timeout=15000)
-                    st.write("✅ Login confirmado!")
-                    
-                    # 4. Navegar para listagens e criar anúncio
-                    st.write("🏠 Navegando para criar anúncio...")
-                    listings_url = "https://canalpro.grupozap.com/ZAP_OLX/0/listings?pageSize=10"
-                    await page.goto(listings_url, wait_until='networkidle')
-                    
-                    # Clicar em Criar anúncio
-                    btn = page.get_by_role("button", name="Criar anúncio")
-                    await btn.wait_for(state="visible", timeout=10000)
-                    await btn.click()
-                    await page.wait_for_load_state("networkidle")
-                    
-                    st.write("📝 Preenchendo dados do imóvel...")
-                    
-                    # 5. Preencher formulário com os dados
-                    
-                    # Tipo residencial (padrão)
-                    await page.click('label[for="zap-switch-radio-755_RESIDENTIAL"]')
-                    
-                    # Tipo do imóvel
-                    tipo_mapeado = mapear_tipo_imovel(dados_completos.get('tipo', 'Apartamento'))
-                    await page.select_option('select[name="unitType"]', tipo_mapeado)
-                    
-                    # Categoria (padrão)
-                    await page.select_option('select[name="category"]', 'CategoryNONE')
-                    
-                    # Quartos, suítes, banheiros, vagas
-                    if dados_completos.get('quartos'):
-                        await page.select_option('select[name="bedrooms"]', str(dados_completos['quartos']))
-                    
-                    if dados_completos.get('suites'):
-                        await page.select_option('select[name="suites"]', str(dados_completos['suites']))
-                    
-                    if dados_completos.get('banheiros'):
-                        await page.select_option('select[name="bathrooms"]', str(dados_completos['banheiros']))
-                    
-                    if dados_completos.get('vagas'):
-                        await page.select_option('select[name="parkingSpaces"]', str(dados_completos['vagas']))
-                    
-                    # Área útil
-                    if dados_completos.get('area'):
-                        await page.fill('input[name="usableAreas"]', str(dados_completos['area']))
-                    
-                    # Andar (se apartamento)
-                    if dados_completos.get('tipo') == 'Apartamento':
-                        await page.select_option('select[name="unitFloor"]', '0')  # Padrão
-                    
-                    # CEP (isso preencherá cidade, UF e bairro automaticamente)
-                    if dados_completos.get('cep'):
-                        await page.fill('input[name="zipCode"]', dados_completos['cep'])
-                        await page.wait_for_timeout(2000)  # Aguardar preenchimento automático
-                    
-                    # Endereço e número
-                    if dados_completos.get('endereco'):
-                        await page.fill('input[name="street"]', dados_completos['endereco'])
-                    
-                    if dados_completos.get('numero'):
-                        await page.fill('input[data-label="número"]', dados_completos['numero'])
-                    
-                    # Complemento
-                    if dados_completos.get('complemento'):
-                        await page.fill('input[name="complement"]', dados_completos['complemento'])
-                    
-                    # Modo de exibição do endereço (padrão: completo)
-                    await page.click('label[for="zap-switch-radio-688_ALL"]')
-                    
-                    # Tipo de operação (Venda)
-                    await page.click('label[for="zap-switch-radio-4070_SALE"]')
-                    
-                    # Valor da venda
-                    if dados_completos.get('preco'):
-                        # Converter para formato sem pontos/vírgulas para o Canal PRO
-                        preco_str = str(int(dados_completos['preco'])) if dados_completos['preco'] else '0'
-                        await page.fill('input[name="priceSale"]', preco_str)
-                    
-                    # Valor do condomínio
-                    if dados_completos.get('condominio'):
-                        cond_str = str(int(dados_completos['condominio'])) if dados_completos['condominio'] else '0'
-                        await page.fill('input[name="monthlyCondoFeeMask"]', cond_str)
-                    
-                    # IPTU
-                    if dados_completos.get('iptu'):
-                        iptu_str = str(int(dados_completos['iptu'])) if dados_completos['iptu'] else '0'
-                        await page.fill('input[name="yearlyIptuMask"]', iptu_str)
-                        
-                        # Período do IPTU
-                        periodo_mapeado = mapear_iptu_periodo(dados_completos.get('iptu_periodo'))
-                        await page.select_option('select[name="period"]', periodo_mapeado)
-                    
-                    # Código do anúncio (se preenchido)
-                    if dados_completos.get('codigo_anuncio_canalpro'):
-                        await page.fill('input[name="externalId"]', dados_completos['codigo_anuncio_canalpro'])
-                    
-                    # Título do anúncio
-                    if dados_completos.get('titulo'):
-                        titulo_truncado = dados_completos['titulo'][:100]  # Limite de 100 caracteres
-                        await page.fill('input[name="title"]', titulo_truncado)
-                    
-                    # Descrição
-                    if dados_completos.get('descricao'):
-                        desc_truncada = dados_completos['descricao'][:3000]  # Limite de 3000 caracteres
-                        await page.fill('textarea[name="description"]', desc_truncada)
-                    
-                    # Link do vídeo YouTube
-                    if dados_completos.get('link_video_youtube'):
-                        await page.fill('input[name="videos"]', dados_completos['link_video_youtube'])
-                    
-                    # Link do tour virtual
-                    if dados_completos.get('link_tour_virtual'):
-                        await page.fill('input[name="videoTourLink"]', dados_completos['link_tour_virtual'])
-                    
-                    st.write("✅ Dados preenchidos com sucesso!")
-                    st.write("🔍 Verifique os campos no browser (60 segundos para inspeção)")
-                    st.write("⚠️ **NÃO PUBLIQUE** - Este é apenas um teste de preenchimento!")
-                    
-                    # Manter browser aberto para inspeção
-                    await page.wait_for_timeout(60000)
-                    
-                    return True
-                    
-                except Exception as e:
-                    st.error(f"❌ Erro durante teste: {e}")
-                    # Manter browser aberto para debug
-                    await page.wait_for_timeout(30000)
-                    return False
-                finally:
-                    await browser.close()
+    except Exception as e:
+        st.error(f"❌ Erro ao preparar teste: {e}")
+        return False
+
+def criar_script_executor(script_path):
+    """Cria o script executor se não existir"""
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    script_content = '''#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Script executor para teste do Canal PRO
+Executado em processo separado para evitar conflitos com Streamlit
+"""
+
+import sys
+import json
+import os
+from pathlib import Path
+
+# CORREÇÃO: Configurar encoding para Windows
+if sys.platform.startswith('win'):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+from playwright.sync_api import sync_playwright
+
+# Adicionar src ao path
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+# Carregar variáveis de ambiente
+from dotenv import load_dotenv
+load_dotenv('config/.env')
+
+def mapear_tipo_imovel(tipo):
+    """Mapeia tipos do scraping para o Canal PRO"""
+    mapeamento = {
+        'Apartamento': 'APARTMENT',
+        'Casa': 'HOME',
+        'Terreno': 'ALLOTMENT_LAND',
+        'Comercial': 'BUILDING'
+    }
+    return mapeamento.get(tipo, 'APARTMENT')
+
+def mapear_iptu_periodo(periodo):
+    """Mapeia período IPTU para o Canal PRO"""
+    if not periodo:
+        return 'YEARLY'
+    if 'Mensal' in str(periodo):
+        return 'MONTHLY'
+    elif 'Anual' in str(periodo):
+        return 'YEARLY'
+    return 'YEARLY'
+
+def executar_teste(dados_completos):
+    """Executa o teste do Canal PRO"""
+    print("Iniciando teste do Canal PRO...")
+    
+    with sync_playwright() as p:
+        # Lançar browser
+        print("Abrindo browser...")
+        browser = p.chromium.launch(
+            headless=False,
+            slow_mo=1500,
+            args=['--start-maximized']
+        )
+        
+        context = browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            locale='pt-BR',
+            timezone_id='America/Sao_Paulo'
+        )
+        page = context.new_page()
+        
+        try:
+            print("Fazendo login no Canal PRO...")
+            
+            # 1. Acessar Canal PRO
+            page.goto('https://canalpro.grupozap.com', wait_until='networkidle')
+            
+            # Fechar cookies
+            try:
+                page.click('button:has-text("Aceitar")', timeout=3000)
+                print("Popup de cookies fechado")
+            except:
+                print("Nenhum popup de cookies encontrado")
+            
+            # 2. Login
+            email = os.getenv('ZAP_EMAIL', '')
+            password = os.getenv('ZAP_PASSWORD', '')
+            
+            if not email or not password:
+                print("ERRO: Configure ZAP_EMAIL e ZAP_PASSWORD no .env")
+                return False
+            
+            print(f"Preenchendo email: {email}")
+            page.get_by_role("textbox", name="Digite seu e-mail").fill(email)
+            
+            print("Preenchendo senha...")
+            page.get_by_role("textbox", name="Digite sua senha").fill(password)
+            
+            print("Clicando em Entrar...")
+            page.get_by_role("button", name="Entrar").click()
+            
+            # 3. Aguardar login
+            print("Aguardando confirmação de login...")
+            page.wait_for_url("**/ZAP_OLX/**", timeout=15000)
+            print("Login confirmado!")
+            
+            # 4. Navegar para criar anúncio
+            print("Navegando para criar anúncio...")
+            listings_url = "https://canalpro.grupozap.com/ZAP_OLX/0/listings?pageSize=10"
+            page.goto(listings_url, wait_until='networkidle')
+            
+            print("Procurando botão 'Criar anúncio'...")
+            btn = page.get_by_role("button", name="Criar anúncio")
+            btn.wait_for(state="visible", timeout=10000)
+            btn.click()
+            page.wait_for_load_state("networkidle")
+            print("Página de criação carregada")
+            
+            # 5. Preencher formulário
+            print("Preenchendo formulário...")
+            page.wait_for_timeout(2000)
+            
+            # Tipo residencial
+            print("Tipo: Residencial")
+            page.click('label[for="zap-switch-radio-755_RESIDENTIAL"]')
+            
+            # Tipo do imóvel
+            tipo_mapeado = mapear_tipo_imovel(dados_completos.get('tipo', 'Apartamento'))
+            print(f"Tipo do imóvel: {tipo_mapeado}")
+            page.select_option('select[name="unitType"]', tipo_mapeado)
+            
+            # Categoria
+            print("Categoria: Padrão")
+            page.select_option('select[name="category"]', 'CategoryNONE')
+            
+            # Quartos, suítes, banheiros, vagas
+            if dados_completos.get('quartos'):
+                print(f"Quartos: {dados_completos['quartos']}")
+                page.select_option('select[name="bedrooms"]', str(dados_completos['quartos']))
+            
+            if dados_completos.get('suites'):
+                print(f"Suítes: {dados_completos['suites']}")
+                page.select_option('select[name="suites"]', str(dados_completos['suites']))
+            
+            if dados_completos.get('banheiros'):
+                print(f"Banheiros: {dados_completos['banheiros']}")
+                page.select_option('select[name="bathrooms"]', str(dados_completos['banheiros']))
+            
+            if dados_completos.get('vagas'):
+                print(f"Vagas: {dados_completos['vagas']}")
+                page.select_option('select[name="parkingSpaces"]', str(dados_completos['vagas']))
+            
+            # Área
+            if dados_completos.get('area'):
+                print(f"Área: {dados_completos['area']}m²")
+                page.fill('input[name="usableAreas"]', str(dados_completos['area']))
+            
+            # Andar (se apartamento)
+            if dados_completos.get('tipo') == 'Apartamento':
+                print("Andar: Térreo")
+                page.select_option('select[name="unitFloor"]', '0')
+            
+            # CEP
+            if dados_completos.get('cep'):
+                print(f"CEP: {dados_completos['cep']}")
+                page.fill('input[name="zipCode"]', dados_completos['cep'])
+                page.wait_for_timeout(3000)
+                print("Aguardando preenchimento automático...")
+            
+            # Endereço e número
+            if dados_completos.get('endereco'):
+                print(f"Endereço: {dados_completos['endereco']}")
+                page.fill('input[name="street"]', dados_completos['endereco'])
+            
+            if dados_completos.get('numero'):
+                print(f"Número: {dados_completos['numero']}")
+                page.fill('input[data-label="número"]', dados_completos['numero'])
+            
+            # Complemento
+            if dados_completos.get('complemento'):
+                print(f"Complemento: {dados_completos['complemento']}")
+                page.fill('input[name="complement"]', dados_completos['complemento'])
+            
+            # Modo de exibição
+            print("Modo: Endereço completo")
+            page.click('label[for="zap-switch-radio-688_ALL"]')
+            
+            # Operação: Venda
+            print("Operação: Venda")
+            page.click('label[for="zap-switch-radio-4070_SALE"]')
+            
+            # Preço
+            if dados_completos.get('preco'):
+                preco_str = str(int(dados_completos['preco']))
+                print(f"Preço: R$ {dados_completos['preco']:,.2f}")
+                page.fill('input[name="priceSale"]', preco_str)
+            
+            # Condomínio
+            if dados_completos.get('condominio'):
+                cond_str = str(int(dados_completos['condominio']))
+                print(f"Condomínio: R$ {dados_completos['condominio']:,.2f}")
+                page.fill('input[name="monthlyCondoFeeMask"]', cond_str)
+            
+            # IPTU
+            if dados_completos.get('iptu'):
+                iptu_str = str(int(dados_completos['iptu']))
+                print(f"IPTU: R$ {dados_completos['iptu']:,.2f}")
+                page.fill('input[name="yearlyIptuMask"]', iptu_str)
+                
+                periodo_mapeado = mapear_iptu_periodo(dados_completos.get('iptu_periodo'))
+                print(f"Período IPTU: {periodo_mapeado}")
+                page.select_option('select[name="period"]', periodo_mapeado)
+            
+            # Código do anúncio
+            if dados_completos.get('codigo_anuncio_canalpro'):
+                print(f"Código: {dados_completos['codigo_anuncio_canalpro']}")
+                page.fill('input[name="externalId"]', dados_completos['codigo_anuncio_canalpro'])
+            
+            # Título
+            if dados_completos.get('titulo'):
+                titulo_truncado = dados_completos['titulo'][:100]
+                print(f"Título: {titulo_truncado}")
+                page.fill('input[name="title"]', titulo_truncado)
+            
+            # Descrição
+            if dados_completos.get('descricao'):
+                desc_truncada = dados_completos['descricao'][:3000]
+                print(f"Descrição: {desc_truncada[:50]}...")
+                page.fill('textarea[name="description"]', desc_truncada)
+            
+            # Links
+            if dados_completos.get('link_video_youtube'):
+                print(f"YouTube: {dados_completos['link_video_youtube']}")
+                page.fill('input[name="videos"]', dados_completos['link_video_youtube'])
+            
+            if dados_completos.get('link_tour_virtual'):
+                print(f"Tour Virtual: {dados_completos['link_tour_virtual']}")
+                page.fill('input[name="videoTourLink"]', dados_completos['link_tour_virtual'])
+            
+            print("")
+            print("FORMULÁRIO PREENCHIDO COM SUCESSO!")
+            print("IMPORTANTE: NÃO PUBLIQUE O ANÚNCIO!")
+            print("O browser ficará aberto por 2 minutos para inspeção...")
+            
+            # Aguardar 2 minutos
+            page.wait_for_timeout(120000)
+            
+            return True
+            
+        except Exception as e:
+            print(f"ERRO durante teste: {e}")
+            page.wait_for_timeout(30000)
+            return False
+        finally:
+            browser.close()
+            print("Browser fechado")
+
+def main():
+    if len(sys.argv) != 2:
+        print("Uso: python canal_pro_test_executor.py <arquivo_dados.json>")
+        sys.exit(1)
+    
+    # Carregar dados do arquivo JSON (CORREÇÃO: encoding UTF-8)
+    try:
+        with open(sys.argv[1], 'r', encoding='utf-8') as f:
+            dados_completos = json.load(f)
         
         # Executar teste
-        return asyncio.run(preencher_canal_pro())
+        sucesso = executar_teste(dados_completos)
         
-    except ImportError:
-        st.error("❌ Biblioteca Playwright não encontrada. Instale com: pip install playwright")
-        return False
+        if sucesso:
+            print("")
+            print("TESTE CONCLUÍDO COM SUCESSO!")
+            sys.exit(0)
+        else:
+            print("")
+            print("TESTE FALHOU")
+            sys.exit(1)
+            
     except Exception as e:
-        st.error(f"❌ Erro ao executar teste: {e}")
-        return False
+        print(f"ERRO ao carregar dados: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+'''
+    
+    with open(script_path, 'w', encoding='utf-8') as f:
+        f.write(script_content)
+        
+def consultar_cep(cep):
     """Consulta CEP na API ViaCEP"""
     try:
         cep_limpo = cep.replace("-", "").replace(".", "").strip()
@@ -301,7 +499,6 @@ def criar_anuncio_se_nao_existe(codigo_imovel):
     
     return False
 
-# Buscar imóveis disponíveis - REMOVIDO CACHE para corrigir problema de status
 def carregar_imoveis():
     """Carrega imóveis com seus dados de anúncio"""
     try:
@@ -325,16 +522,15 @@ if not imoveis:
 # Seleção do imóvel
 st.markdown("### 1️⃣ Selecione o Imóvel para Editar")
 
-# Preparar dados para exibição - STATUS BASEADO NO BANCO
+# Preparar dados para exibição
 imoveis_display = []
 for imovel in imoveis:
     anuncio_info = imovel.get('anuncios', [])
     
-    # LÓGICA CORRIGIDA: status baseado APENAS em codigo_anuncio_canalpro
+    # Lógica de status
     if anuncio_info and len(anuncio_info) > 0:
         anuncio = anuncio_info[0]
         
-        # Verificar status baseado APENAS no código do anúncio Canal PRO
         if anuncio.get('publicado') == True:
             status_anuncio = "✅ Publicado"
             status_class = "status-publicado"
@@ -348,31 +544,26 @@ for imovel in imoveis:
             status_anuncio = "🆕 Novo"
             status_class = "status-novo"
     else:
-        # Sem anúncio = Novo
         status_anuncio = "🆕 Novo"
         status_class = "status-novo"
     
-    # Processar fotos - CORREÇÃO para todos os imóveis
+    # Processar fotos
     fotos = []
     if imovel.get('fotos'):
         try:
             if isinstance(imovel['fotos'], str):
-                # Se for string, tentar fazer parse JSON
                 fotos_data = json.loads(imovel['fotos'])
                 if isinstance(fotos_data, list):
                     fotos = fotos_data
                 else:
                     fotos = []
             elif isinstance(imovel['fotos'], list):
-                # Se já for lista, usar diretamente
                 fotos = imovel['fotos']
             else:
                 fotos = []
         except (json.JSONDecodeError, TypeError):
-            # Se der erro no parse, tentar como string simples
             fotos_str = str(imovel.get('fotos', ''))
             if fotos_str and fotos_str != 'null':
-                # Tentar extrair URLs manualmente se for uma string mal formatada
                 import re
                 urls = re.findall(r'https?://[^\s,\]"]+', fotos_str)
                 fotos = urls
@@ -391,7 +582,7 @@ for imovel in imoveis:
         'condominio': f"R$ {imovel.get('condominio', 0):,.2f}" if imovel.get('condominio') else "N/A",
         'iptu': f"R$ {imovel.get('iptu', 0):,.2f}" if imovel.get('iptu') else "N/A",
         'iptu_periodo': imovel.get('iptu_periodo', 'N/A') or 'N/A',
-        'codigo_canalpro': anuncio.get('codigo_anuncio_canalpro', '') if anuncio_info and len(anuncio_info) > 0 else ''  # NOVA COLUNA
+        'codigo_canalpro': anuncio.get('codigo_anuncio_canalpro', '') if anuncio_info and len(anuncio_info) > 0 else ''
     })
 
 # Filtros
@@ -431,7 +622,7 @@ if len(df_filtered) == 0:
     st.warning("Nenhum imóvel encontrado com os filtros selecionados.")
     st.stop()
 
-# Exibir tabela com mais informações se solicitado
+# Exibir tabela
 columns_to_show = ['codigo', 'titulo', 'status', 'preco', 'area', 'cidade']
 if mostrar_detalhes:
     columns_to_show.extend(['fotos_count', 'condominio', 'iptu', 'iptu_periodo', 'codigo_canalpro'])
@@ -464,12 +655,11 @@ if not imovel_selecionado:
     st.error("Erro ao carregar dados do imóvel selecionado")
     st.stop()
 
-# Verificar se tem anúncio, senão criar
+# Verificar se tem anúncio
 anuncio_data = {}
 if imovel_selecionado.get('anuncios') and len(imovel_selecionado['anuncios']) > 0:
     anuncio_data = imovel_selecionado['anuncios'][0]
 else:
-    # Tentar criar anúncio automaticamente
     if criar_anuncio_se_nao_existe(codigo_selecionado):
         st.cache_data.clear()
         st.rerun()
@@ -485,14 +675,13 @@ with col1:
     st.markdown(f"**📋 {imovel_selecionado['titulo']}**")
     st.write(f"📍 {imovel_selecionado.get('localizacao', 'N/A')}")
     
-    # Layout reorganizado: Preço e Condomínio na primeira linha
+    # Layout de métricas
     col_preco, col_cond = st.columns(2)
     with col_preco:
         st.metric("💰 Preço", f"R$ {imovel_selecionado.get('preco', 0):,.2f}" if imovel_selecionado.get('preco') else "N/A")
     with col_cond:
         st.metric("🏢 Condomínio", f"R$ {imovel_selecionado.get('condominio', 0):,.2f}" if imovel_selecionado.get('condominio') else "N/A")
     
-    # Segunda linha: Área, IPTU e Período (alinhados)
     col_area, col_iptu, col_periodo = st.columns(3)
     with col_area:
         st.metric("📐 Área", f"{imovel_selecionado.get('area', 0)}m²" if imovel_selecionado.get('area') else "N/A")
@@ -501,24 +690,21 @@ with col1:
     with col_periodo:
         st.metric("📅 Período IPTU", imovel_selecionado.get('iptu_periodo', 'N/A') or 'N/A')
     
-    # Terceira linha: Detalhes do imóvel (incluindo SUÍTES)
     st.write(f"🏠 {imovel_selecionado.get('quartos', 0)} quartos • ✨ {imovel_selecionado.get('suites', 0)} suítes • 🛁 {imovel_selecionado.get('banheiros', 0)} banheiros • 🚗 {imovel_selecionado.get('vagas', 0)} vagas")
 
 with col2:
-    # Galeria de fotos - CORREÇÃO para todos os imóveis
+    # Galeria de fotos
     if imovel_selecionado.get('fotos'):
         try:
             fotos = []
             fotos_raw = imovel_selecionado['fotos']
             
             if isinstance(fotos_raw, str):
-                # Tentar parse JSON
                 try:
                     fotos_data = json.loads(fotos_raw)
                     if isinstance(fotos_data, list):
                         fotos = fotos_data
                 except json.JSONDecodeError:
-                    # Se falhar, tentar extrair URLs manualmente
                     import re
                     urls = re.findall(r'https?://[^\s,\]"]+', fotos_raw)
                     fotos = urls
@@ -528,16 +714,12 @@ with col2:
             if fotos and len(fotos) > 0:
                 st.write(f"📸 **{len(fotos)} fotos disponíveis**")
                 
-                # Preview com primeira foto
                 try:
                     st.image(fotos[0], caption="Preview", use_container_width=True)
-                except Exception as img_error:
+                except Exception:
                     st.write("❌ Erro ao carregar preview")
-                    st.write(f"Debug URL: {fotos[0] if fotos else 'Nenhuma'}")
                 
-                # Expandir para ver todas as fotos
                 with st.expander(f"🖼️ Ver todas as {len(fotos)} fotos"):
-                    # Organizar fotos em grid
                     cols_per_row = 3
                     for i in range(0, len(fotos), cols_per_row):
                         cols = st.columns(cols_per_row)
@@ -551,16 +733,12 @@ with col2:
                                         st.caption(f"URL: {fotos[i + j][:50]}...")
             else:
                 st.write("📸 Fotos não processadas corretamente")
-                st.write(f"Debug: {type(fotos_raw)} - {str(fotos_raw)[:100]}...")
                 
         except Exception as e:
             st.write("❌ Erro ao processar fotos")
             st.write(f"Debug erro: {e}")
-            st.write(f"Debug dados: {str(imovel_selecionado.get('fotos', 'None'))[:200]}...")
     else:
         st.write("📸 Nenhuma foto disponível")
-
-st.markdown("---")
 
 st.markdown("---")
 
@@ -758,38 +936,38 @@ with col2:
     )
 
 st.markdown("---")
-    
-    # Seção 3: Preview dos dados que serão enviados ao Canal PRO
+
+# Seção 3: Preview dos dados que serão enviados ao Canal PRO
 st.markdown("#### 📋 Preview - Dados para Canal PRO")
-    
+
 with st.expander("👁️ Ver dados que serão enviados ao Canal PRO"):
-        preview_cols = st.columns(2)
+    preview_cols = st.columns(2)
+    
+    with preview_cols[0]:
+        st.markdown("**📍 Localização:**")
+        st.write(f"• CEP: {cep}")
+        st.write(f"• Endereço: {endereco}")
+        st.write(f"• Número: {numero}")
+        st.write(f"• Complemento: {complemento}")
+        st.write(f"• Bairro: {bairro}")
+        st.write(f"• Cidade: {cidade}")
+        st.write(f"• Estado: {estado}")
         
-        with preview_cols[0]:
-            st.markdown("**📍 Localização:**")
-            st.write(f"• CEP: {cep}")
-            st.write(f"• Endereço: {endereco}")
-            st.write(f"• Número: {numero}")
-            st.write(f"• Complemento: {complemento}")
-            st.write(f"• Bairro: {bairro}")
-            st.write(f"• Cidade: {cidade}")
-            st.write(f"• Estado: {estado}")
-            
-        with preview_cols[1]:
-            st.markdown("**🏠 Dados do Imóvel:**")
-            st.write(f"• Tipo: {imovel_selecionado.get('tipo', 'N/A')}")
-            st.write(f"• Quartos: {imovel_selecionado.get('quartos', 'N/A')}")
-            st.write(f"• Banheiros: {imovel_selecionado.get('banheiros', 'N/A')}")
-            st.write(f"• Vagas: {imovel_selecionado.get('vagas', 'N/A')}")
-            st.write(f"• Área: {imovel_selecionado.get('area', 'N/A')}m²")
-            st.write(f"• Preço: R$ {imovel_selecionado.get('preco', 0):,.2f}")
-            
-        st.markdown("**🔗 Links:**")
-        st.write(f"• Vídeo: {link_video_youtube}")
-        st.write(f"• Tour Virtual: {link_tour_virtual}")
-    
+    with preview_cols[1]:
+        st.markdown("**🏠 Dados do Imóvel:**")
+        st.write(f"• Tipo: {imovel_selecionado.get('tipo', 'N/A')}")
+        st.write(f"• Quartos: {imovel_selecionado.get('quartos', 'N/A')}")
+        st.write(f"• Banheiros: {imovel_selecionado.get('banheiros', 'N/A')}")
+        st.write(f"• Vagas: {imovel_selecionado.get('vagas', 'N/A')}")
+        st.write(f"• Área: {imovel_selecionado.get('area', 'N/A')}m²")
+        st.write(f"• Preço: R$ {imovel_selecionado.get('preco', 0):,.2f}")
+        
+    st.markdown("**🔗 Links:**")
+    st.write(f"• Vídeo: {link_video_youtube}")
+    st.write(f"• Tour Virtual: {link_tour_virtual}")
+
 st.markdown("---")
-    
+
 # Validação e botões
 st.markdown("#### ✅ Status de Completude")
 
@@ -871,10 +1049,66 @@ with col4:
         help="Funcionalidade em desenvolvimento"
     )
 
-# Processar submissão do formulário
+# CORREÇÃO PRINCIPAL: Conectar o botão "Testar Canal PRO" à função
+if testar_canal_pro:
+    if porcentagem >= 100:
+        # Montar dados completos para o teste
+        dados_completos = {
+            # Dados do imóvel (do scraping)
+            'tipo': imovel_selecionado.get('tipo'),
+            'quartos': imovel_selecionado.get('quartos'),
+            'suites': imovel_selecionado.get('suites'),
+            'banheiros': imovel_selecionado.get('banheiros'),
+            'vagas': imovel_selecionado.get('vagas'),
+            'area': imovel_selecionado.get('area'),
+            'preco': imovel_selecionado.get('preco'),
+            'condominio': imovel_selecionado.get('condominio'),
+            'iptu': imovel_selecionado.get('iptu'),
+            'iptu_periodo': imovel_selecionado.get('iptu_periodo'),
+            
+            # Dados editáveis (se foram modificados)
+            'titulo': titulo_editado if 'titulo_input' in st.session_state else imovel_selecionado.get('titulo'),
+            'descricao': descricao_editada if 'descricao_input' in st.session_state else imovel_selecionado.get('descricao'),
+            
+            # Dados do formulário de endereço
+            'cep': cep,
+            'endereco': endereco,
+            'numero': numero,
+            'complemento': complemento,
+            'bairro': bairro,
+            'cidade': cidade,
+            'estado': estado,
+            
+            # Configurações do Canal PRO
+            'codigo_anuncio_canalpro': codigo_anuncio_canalpro,
+            'link_video_youtube': link_video_youtube,
+            'link_tour_virtual': link_tour_virtual,
+            'modo_exibicao_endereco': modo_exibicao_endereco,
+        }
+        
+        st.info("🚀 Iniciando teste do Canal PRO...")
+        st.info("📱 Um browser será aberto automaticamente")
+        st.warning("⚠️ **IMPORTANTE: Este é apenas um TESTE! NÃO publique o anúncio!**")
+        
+        # Executar o teste
+        with st.spinner("🔄 Executando teste no Canal PRO..."):
+            sucesso = executar_teste_canal_pro(dados_completos)
+            
+            if sucesso:
+                st.success("✅ Teste do Canal PRO concluído!")
+                st.info("🔍 Verifique se todos os campos foram preenchidos corretamente no browser.")
+                st.info("📝 Anote quaisquer problemas encontrados.")
+            else:
+                st.error("❌ Erro durante o teste do Canal PRO.")
+                st.error("🔧 Verifique os logs acima para mais detalhes.")
+    else:
+        st.error("❌ Complete todos os campos obrigatórios antes de testar no Canal PRO.")
+        st.info("💡 Você precisa preencher: CEP, Endereço, Bairro, Número e ter pelo menos 3 fotos.")
+
+# Processar submissão dos outros botões (salvar)
 if salvar_rascunho or salvar_completo:
     
-    # Preparar dados para salvar (incluindo campos editáveis do scraping)
+    # Preparar dados para salvar
     dados_imovel = {
         'cep': cep.strip() if cep.strip() else None,
         'endereco': endereco.strip() if endereco.strip() else None,
@@ -897,7 +1131,7 @@ if salvar_rascunho or salvar_completo:
         'link_video_youtube': link_video_youtube.strip() if link_video_youtube.strip() else None,
         'link_tour_virtual': link_tour_virtual.strip() if link_tour_virtual.strip() else None,
         'modo_exibicao_endereco': modo_exibicao_endereco,
-        'pronto_para_publicacao': salvar_completo  # Diferenciação entre os botões
+        'pronto_para_publicacao': salvar_completo
     }
     
     try:
@@ -923,7 +1157,7 @@ if salvar_rascunho or salvar_completo:
         # Feedback de sucesso
         if salvar_completo:
             st.success("✅ Dados salvos e imóvel marcado como PRONTO para publicação!")
-            st.info("💡 Este imóvel agora aparecerá como 'Preparado' na listagem e estará pronto para ser publicado no Canal PRO.")
+            st.info("💡 Este imóvel agora aparecerá como 'Preparado' na listagem e estará pronto para ser testado no Canal PRO.")
             st.balloons()
         else:
             st.success("💾 Rascunho salvo com sucesso!")
