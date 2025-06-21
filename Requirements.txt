@@ -1,0 +1,11 @@
+# requirements.txt atualizado
+streamlit==1.46.0
+streamlit-aggrid==0.3.4
+playwright==1.52.0
+python-dotenv==1.1.0
+requests==2.32.4
+beautifulsoup4==4.13.4
+numpy==2.3
+pandas==2.3.0
+supabase==2.3.0
+Pillow==11.2.1
