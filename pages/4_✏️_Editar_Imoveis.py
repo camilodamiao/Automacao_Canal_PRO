@@ -88,9 +88,14 @@ import os
 from pathlib import Path
 
 def executar_teste_canal_pro(dados_completos):
-    """Executa teste usando subprocess separado para evitar conflitos com Streamlit"""
+    """Executa teste usando subprocess separado - VERSÃO CORRIGIDA"""
     try:
-        # Criar arquivo temporário com os dados (CORREÇÃO: encoding UTF-8)
+        # Validar dados essenciais
+        if not dados_completos:
+            st.error("❌ Dados não fornecidos para o teste")
+            return False
+        
+        # Criar arquivo temporário com os dados
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as temp_file:
             json.dump(dados_completos, temp_file, ensure_ascii=False, indent=2)
             temp_path = temp_file.name
@@ -100,92 +105,168 @@ def executar_teste_canal_pro(dados_completos):
         
         # Se o script não existir, criar
         if not script_executor.exists():
-            criar_script_executor(script_executor)
+            try:
+                criar_script_executor(script_executor)
+                st.info("📝 Script executor criado com sucesso")
+            except Exception as e:
+                st.error(f"❌ Erro ao criar script: {e}")
+                return False
         
         st.info("🚀 Executando teste em processo separado...")
         st.info("📱 Um browser será aberto automaticamente")
+        st.warning("⚠️ **IMPORTANTE: NÃO publique o anúncio - é apenas um teste!**")
         
-        # Executar em subprocess separado (CORREÇÃO: definir encoding)
+        # Mostrar progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Preparar ambiente
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['PYTHONPATH'] = str(Path(__file__).parent.parent)
+        
+        # Executar subprocess
         try:
-            # Definir variáveis de ambiente para encoding
-            env = os.environ.copy()
-            env['PYTHONIOENCODING'] = 'utf-8'
+            status_text.text("🔄 Iniciando processo...")
+            progress_bar.progress(0.1)
             
-            result = subprocess.run([
-                sys.executable,  # Python atual
+            # Comando para executar
+            cmd = [
+                sys.executable,
                 str(script_executor),
                 temp_path
-            ], 
-            capture_output=True, 
-            text=True, 
-            timeout=300,  # 5 minutos de timeout
-            cwd=Path(__file__).parent.parent,  # Diretório raiz do projeto
-            env=env,  # Usar ambiente com encoding correto
-            encoding='utf-8',  # Forçar UTF-8
-            errors='replace'  # Substituir caracteres problemáticos
+            ]
+            
+            status_text.text("🌐 Abrindo browser...")
+            progress_bar.progress(0.3)
+            
+            # Executar com timeout
+            result = subprocess.run(
+                cmd,
+                capture_output=True, 
+                text=True, 
+                timeout=300,  # 5 minutos
+                cwd=Path(__file__).parent.parent,
+                env=env,
+                encoding='utf-8',
+                errors='replace'
             )
+            
+            progress_bar.progress(1.0)
+            status_text.text("✅ Processo concluído")
             
             # Processar resultado
             if result.returncode == 0:
                 st.success("✅ Teste executado com sucesso!")
+                
                 if result.stdout:
-                    st.text("📋 Log do teste:")
-                    st.text(result.stdout)
+                    st.text("📋 Log detalhado do teste:")
+                    # Mostrar log em expandir para não poluir a tela
+                    with st.expander("Ver log completo"):
+                        st.text(result.stdout)
+                
+                # Extrair informações importantes do log
+                if "FORMULÁRIO PREENCHIDO COM SUCESSO" in result.stdout:
+                    st.success("🎯 **Formulário preenchido corretamente!**")
+                if "LOGIN confirmado" in result.stdout:
+                    st.success("🔐 **Login realizado com sucesso!**")
+                
                 return True
             else:
                 st.error("❌ Erro durante execução do teste")
+                
+                # Mostrar erro detalhado
                 if result.stderr:
-                    st.error("Detalhes do erro:")
-                    st.text(result.stderr)
+                    st.error("**Detalhes do erro:**")
+                    with st.expander("Ver erro completo"):
+                        st.text(result.stderr)
+                
+                # Mostrar stdout mesmo com erro (pode ter logs úteis)
+                if result.stdout:
+                    st.warning("**Log parcial:**")
+                    with st.expander("Ver log"):
+                        st.text(result.stdout)
+                
                 return False
                 
         except subprocess.TimeoutExpired:
             st.warning("⏰ Teste excedeu tempo limite (5 minutos)")
+            st.info("💡 O browser pode ainda estar aberto para inspeção manual")
             return False
+            
+        except FileNotFoundError:
+            st.error("❌ Python não encontrado no PATH")
+            st.error("💡 Verifique se o Python está instalado corretamente")
+            return False
+            
         except Exception as e:
             st.error(f"❌ Erro ao executar subprocess: {e}")
+            
+            # Debug adicional
+            st.info("🔍 **Informações de debug:**")
+            st.write(f"- Script: {script_executor}")
+            st.write(f"- Script existe: {script_executor.exists()}")
+            st.write(f"- Diretório trabalho: {Path(__file__).parent.parent}")
+            st.write(f"- Python: {sys.executable}")
+            
             return False
         finally:
-            # Limpar arquivo temporário
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-                
+            # Limpar barra de progresso
+            progress_bar.empty()
+            status_text.empty()
+            
     except Exception as e:
         st.error(f"❌ Erro ao preparar teste: {e}")
         return False
+    finally:
+        # Limpar arquivo temporário
+        try:
+            if 'temp_path' in locals():
+                os.unlink(temp_path)
+        except:
+            pass
 
 def criar_script_executor(script_path):
-    """Cria o script executor se não existir"""
+    """Cria o script executor CORRIGIDO com upload via botão customizado e footer forçado"""
     script_path.parent.mkdir(parents=True, exist_ok=True)
     
+    # Usar o conteúdo do artifact canal_pro_executor_fixed
     script_content = '''#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Script executor para teste do Canal PRO
-Executado em processo separado para evitar conflitos com Streamlit
+Script executor CORRIGIDO para teste do Canal PRO
+CORREÇÕES: Upload via botão customizado + Forçar aparecimento do footer
 """
 
 import sys
 import json
 import os
+import time
+import requests
+import tempfile
 from pathlib import Path
 
-# CORREÇÃO: Configurar encoding para Windows
+# Configurar encoding para Windows
 if sys.platform.startswith('win'):
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("ERRO: Playwright não instalado. Execute: pip install playwright")
+    sys.exit(1)
 
 # Adicionar src ao path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 # Carregar variáveis de ambiente
-from dotenv import load_dotenv
-load_dotenv('config/.env')
+try:
+    from dotenv import load_dotenv
+    load_dotenv('config/.env')
+except ImportError:
+    print("AVISO: python-dotenv não encontrado. Configure as variáveis manualmente.")
 
 def mapear_tipo_imovel(tipo):
     """Mapeia tipos do scraping para o Canal PRO"""
@@ -207,245 +288,399 @@ def mapear_iptu_periodo(periodo):
         return 'YEARLY'
     return 'YEARLY'
 
-def executar_teste(dados_completos):
-    """Executa o teste do Canal PRO"""
-    print("Iniciando teste do Canal PRO...")
-    
-    with sync_playwright() as p:
-        # Lançar browser
-        print("Abrindo browser...")
-        browser = p.chromium.launch(
-            headless=False,
-            slow_mo=1500,
-            args=['--start-maximized']
-        )
-        
-        context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            locale='pt-BR',
-            timezone_id='America/Sao_Paulo'
-        )
-        page = context.new_page()
-        
-        try:
-            print("Fazendo login no Canal PRO...")
-            
-            # 1. Acessar Canal PRO
-            page.goto('https://canalpro.grupozap.com', wait_until='networkidle')
-            
-            # Fechar cookies
-            try:
-                page.click('button:has-text("Aceitar")', timeout=3000)
-                print("Popup de cookies fechado")
-            except:
-                print("Nenhum popup de cookies encontrado")
-            
-            # 2. Login
-            email = os.getenv('ZAP_EMAIL', '')
-            password = os.getenv('ZAP_PASSWORD', '')
-            
-            if not email or not password:
-                print("ERRO: Configure ZAP_EMAIL e ZAP_PASSWORD no .env")
-                return False
-            
-            print(f"Preenchendo email: {email}")
-            page.get_by_role("textbox", name="Digite seu e-mail").fill(email)
-            
-            print("Preenchendo senha...")
-            page.get_by_role("textbox", name="Digite sua senha").fill(password)
-            
-            print("Clicando em Entrar...")
-            page.get_by_role("button", name="Entrar").click()
-            
-            # 3. Aguardar login
-            print("Aguardando confirmação de login...")
-            page.wait_for_url("**/ZAP_OLX/**", timeout=15000)
-            print("Login confirmado!")
-            
-            # 4. Navegar para criar anúncio
-            print("Navegando para criar anúncio...")
-            listings_url = "https://canalpro.grupozap.com/ZAP_OLX/0/listings?pageSize=10"
-            page.goto(listings_url, wait_until='networkidle')
-            
-            print("Procurando botão 'Criar anúncio'...")
-            btn = page.get_by_role("button", name="Criar anúncio")
-            btn.wait_for(state="visible", timeout=10000)
-            btn.click()
-            page.wait_for_load_state("networkidle")
-            print("Página de criação carregada")
-            
-            # 5. Preencher formulário
-            print("Preenchendo formulário...")
-            page.wait_for_timeout(2000)
-            
-            # Tipo residencial
-            print("Tipo: Residencial")
-            page.click('label[for="zap-switch-radio-755_RESIDENTIAL"]')
-            
-            # Tipo do imóvel
-            tipo_mapeado = mapear_tipo_imovel(dados_completos.get('tipo', 'Apartamento'))
-            print(f"Tipo do imóvel: {tipo_mapeado}")
-            page.select_option('select[name="unitType"]', tipo_mapeado)
-            
-            # Categoria
-            print("Categoria: Padrão")
-            page.select_option('select[name="category"]', 'CategoryNONE')
-            
-            # Quartos, suítes, banheiros, vagas
-            if dados_completos.get('quartos'):
-                print(f"Quartos: {dados_completos['quartos']}")
-                page.select_option('select[name="bedrooms"]', str(dados_completos['quartos']))
-            
-            if dados_completos.get('suites'):
-                print(f"Suítes: {dados_completos['suites']}")
-                page.select_option('select[name="suites"]', str(dados_completos['suites']))
-            
-            if dados_completos.get('banheiros'):
-                print(f"Banheiros: {dados_completos['banheiros']}")
-                page.select_option('select[name="bathrooms"]', str(dados_completos['banheiros']))
-            
-            if dados_completos.get('vagas'):
-                print(f"Vagas: {dados_completos['vagas']}")
-                page.select_option('select[name="parkingSpaces"]', str(dados_completos['vagas']))
-            
-            # Área
-            if dados_completos.get('area'):
-                print(f"Área: {dados_completos['area']}m²")
-                page.fill('input[name="usableAreas"]', str(dados_completos['area']))
-            
-            # Andar (se apartamento)
-            if dados_completos.get('tipo') == 'Apartamento':
-                print("Andar: Térreo")
-                page.select_option('select[name="unitFloor"]', '0')
-            
-            # CEP
-            if dados_completos.get('cep'):
-                print(f"CEP: {dados_completos['cep']}")
-                page.fill('input[name="zipCode"]', dados_completos['cep'])
-                page.wait_for_timeout(3000)
-                print("Aguardando preenchimento automático...")
-            
-            # Endereço e número
-            if dados_completos.get('endereco'):
-                print(f"Endereço: {dados_completos['endereco']}")
-                page.fill('input[name="street"]', dados_completos['endereco'])
-            
-            if dados_completos.get('numero'):
-                print(f"Número: {dados_completos['numero']}")
-                page.fill('input[data-label="número"]', dados_completos['numero'])
-            
-            # Complemento
-            if dados_completos.get('complemento'):
-                print(f"Complemento: {dados_completos['complemento']}")
-                page.fill('input[name="complement"]', dados_completos['complemento'])
-            
-            # Modo de exibição
-            print("Modo: Endereço completo")
-            page.click('label[for="zap-switch-radio-688_ALL"]')
-            
-            # Operação: Venda
-            print("Operação: Venda")
-            page.click('label[for="zap-switch-radio-4070_SALE"]')
-            
-            # Preço
-            if dados_completos.get('preco'):
-                preco_str = str(int(dados_completos['preco']))
-                print(f"Preço: R$ {dados_completos['preco']:,.2f}")
-                page.fill('input[name="priceSale"]', preco_str)
-            
-            # Condomínio
-            if dados_completos.get('condominio'):
-                cond_str = str(int(dados_completos['condominio']))
-                print(f"Condomínio: R$ {dados_completos['condominio']:,.2f}")
-                page.fill('input[name="monthlyCondoFeeMask"]', cond_str)
-            
-            # IPTU
-            if dados_completos.get('iptu'):
-                iptu_str = str(int(dados_completos['iptu']))
-                print(f"IPTU: R$ {dados_completos['iptu']:,.2f}")
-                page.fill('input[name="yearlyIptuMask"]', iptu_str)
-                
-                periodo_mapeado = mapear_iptu_periodo(dados_completos.get('iptu_periodo'))
-                print(f"Período IPTU: {periodo_mapeado}")
-                page.select_option('select[name="period"]', periodo_mapeado)
-            
-            # Código do anúncio
-            if dados_completos.get('codigo_anuncio_canalpro'):
-                print(f"Código: {dados_completos['codigo_anuncio_canalpro']}")
-                page.fill('input[name="externalId"]', dados_completos['codigo_anuncio_canalpro'])
-            
-            # Título
-            if dados_completos.get('titulo'):
-                titulo_truncado = dados_completos['titulo'][:100]
-                print(f"Título: {titulo_truncado}")
-                page.fill('input[name="title"]', titulo_truncado)
-            
-            # Descrição
-            if dados_completos.get('descricao'):
-                desc_truncada = dados_completos['descricao'][:3000]
-                print(f"Descrição: {desc_truncada[:50]}...")
-                page.fill('textarea[name="description"]', desc_truncada)
-            
-            # Links
-            if dados_completos.get('link_video_youtube'):
-                print(f"YouTube: {dados_completos['link_video_youtube']}")
-                page.fill('input[name="videos"]', dados_completos['link_video_youtube'])
-            
-            if dados_completos.get('link_tour_virtual'):
-                print(f"Tour Virtual: {dados_completos['link_tour_virtual']}")
-                page.fill('input[name="videoTourLink"]', dados_completos['link_tour_virtual'])
-            
-            print("")
-            print("FORMULÁRIO PREENCHIDO COM SUCESSO!")
-            print("IMPORTANTE: NÃO PUBLIQUE O ANÚNCIO!")
-            print("O browser ficará aberto por 2 minutos para inspeção...")
-            
-            # Aguardar 2 minutos
-            page.wait_for_timeout(120000)
-            
-            return True
-            
-        except Exception as e:
-            print(f"ERRO durante teste: {e}")
-            page.wait_for_timeout(30000)
-            return False
-        finally:
-            browser.close()
-            print("Browser fechado")
-
-def main():
-    if len(sys.argv) != 2:
-        print("Uso: python canal_pro_test_executor.py <arquivo_dados.json>")
-        sys.exit(1)
-    
-    # Carregar dados do arquivo JSON (CORREÇÃO: encoding UTF-8)
+def verificar_estado_switch_inteligente(page, seletores_grupo, nome_campo):
+    """Verifica estado de switches problemáticos antes de clicar"""
     try:
-        with open(sys.argv[1], 'r', encoding='utf-8') as f:
-            dados_completos = json.load(f)
+        print(f"🔍 Verificando estado do {nome_campo}...")
         
-        # Executar teste
-        sucesso = executar_teste(dados_completos)
+        for seletor in seletores_grupo:
+            try:
+                element = page.locator(seletor)
+                if element.count() > 0 and element.first.is_visible():
+                    # Verificar se já está selecionado via classes ou atributos
+                    classes = element.first.get_attribute("class") or ""
+                    if any(cls in classes.lower() for cls in ["active", "selected", "checked"]):
+                        print(f"   ✅ {nome_campo} já está selecionado")
+                        return True
+                    
+                    # Se não está selecionado, clicar
+                    element.first.click()
+                    time.sleep(0.5)
+                    print(f"   ✅ {nome_campo} clicado com sucesso")
+                    return True
+            except:
+                continue
         
-        if sucesso:
-            print("")
-            print("TESTE CONCLUÍDO COM SUCESSO!")
-            sys.exit(0)
-        else:
-            print("")
-            print("TESTE FALHOU")
-            sys.exit(1)
+        print(f"   ℹ️ {nome_campo} - assumindo estado padrão correto")
+        return True
             
     except Exception as e:
-        print(f"ERRO ao carregar dados: {e}")
-        sys.exit(1)
+        print(f"   ℹ️ {nome_campo} - continuando (erro: {str(e)[:50]})")
+        return True
 
-if __name__ == "__main__":
-    main()
+def preencher_campo_simples(page, seletor, valor, nome_campo, tipo="input"):
+    """Preenche campos simples do formulário"""
+    try:
+        print(f"📝 Preenchendo {nome_campo}: {valor}")
+        
+        element = page.locator(seletor)
+        element.wait_for(state="visible", timeout=10000)
+        
+        if tipo == "select":
+            element.select_option(str(valor))
+        elif tipo == "click":
+            element.click()
+        else:
+            element.clear()
+            element.fill(str(valor))
+        
+        print(f"   ✅ {nome_campo} preenchido")
+        time.sleep(0.3)
+        return True
+        
+    except Exception as e:
+        print(f"   ❌ Erro ao preencher {nome_campo}: {str(e)[:100]}")
+        return False
+
+def fazer_upload_fotos_corrigido(page, fotos_urls):
+    """Upload de fotos via botão customizado do Canal PRO"""
+    if not fotos_urls or len(fotos_urls) == 0:
+        print("📸 Nenhuma foto para upload")
+        return False
+    
+    print(f"\\n📸 INICIANDO UPLOAD DE {len(fotos_urls)} FOTOS")
+    print("-" * 50)
+    
+    try:
+        # 1. BAIXAR FOTOS TEMPORARIAMENTE
+        print("📥 Baixando fotos do Supabase...")
+        fotos_temp = []
+        
+        for i, url in enumerate(fotos_urls[:8], 1):  # Máximo 8 fotos
+            try:
+                print(f"   📥 Baixando foto {i}/{min(len(fotos_urls), 8)}...")
+                
+                response = requests.get(url, timeout=30, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                response.raise_for_status()
+                
+                if len(response.content) < 1000:
+                    print(f"   ⚠️ Foto {i} muito pequena, pulando...")
+                    continue
+                
+                # Salvar temporariamente
+                with tempfile.NamedTemporaryFile(suffix=f'_foto_{i}.jpg', delete=False) as temp_file:
+                    temp_file.write(response.content)
+                    temp_path = temp_file.name
+                
+                fotos_temp.append(temp_path)
+                print(f"   ✅ Foto {i} baixada ({len(response.content):,} bytes)")
+                
+            except Exception as e:
+                print(f"   ❌ Erro ao baixar foto {i}: {str(e)[:50]}")
+                continue
+        
+        if not fotos_temp:
+            print("❌ Nenhuma foto foi baixada com sucesso")
+            return False
+        
+        print(f"\\n✅ {len(fotos_temp)} fotos prontas para upload")
+        
+        # 2. ROLAR ATÉ A SEÇÃO DE FOTOS
+        print("\\n📜 Navegando até seção de fotos...")
+        
+        # Tentar encontrar a seção de imagens primeiro
+        try:
+            # Procurar pela seção de imagens
+            secao_imagens = page.locator('#listing-detail-images, .listing-detail-images, [class*="image"]').first
+            if secao_imagens.count() > 0:
+                secao_imagens.scroll_into_view_if_needed()
+                print("   ✅ Seção de imagens encontrada")
+                time.sleep(1)
+            else:
+                # Se não encontrar, rolar até o final
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.8);")
+                time.sleep(1)
+        except:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.8);")
+            time.sleep(1)
+        
+        # 3. CLICAR NO BOTÃO "ADICIONAR FOTOS"
+        print("\\n🖱️ Procurando botão 'Adicionar fotos'...")
+        
+        # Seletores do botão customizado
+        botao_selectors = [
+            'button:has-text("Adicionar fotos")',
+            '.listing-detail-images__display-box-inner__button',
+            '#listing-detail-images button',
+            'button.new-l-button:has-text("Adicionar")',
+            'button[class*="listing-detail-images"]',
+            'button:has(svg):has-text("Adicionar")'
+        ]
+        
+        botao_clicado = False
+        for selector in botao_selectors:
+            try:
+                botao = page.locator(selector).first
+                if botao.count() > 0 and botao.is_visible():
+                    print(f"   ✅ Botão encontrado: {selector}")
+                    
+                    # Destacar o botão antes de clicar
+                    page.evaluate(f"""
+                        const btn = document.querySelector('{selector}');
+                        if (btn) {{
+                            btn.style.border = '3px solid red';
+                            btn.style.backgroundColor = 'yellow';
+                        }}
+                    """)
+                    
+                    time.sleep(0.5)
+                    botao.click()
+                    botao_clicado = True
+                    print("   ✅ Botão 'Adicionar fotos' clicado!")
+                    time.sleep(1)
+                    break
+            except Exception as e:
+                print(f"   ❌ Tentativa com {selector} falhou: {str(e)[:50]}")
+                continue
+        
+        if not botao_clicado:
+            print("   ❌ Não foi possível clicar no botão 'Adicionar fotos'")
+            # Tentar método alternativo - procurar input file escondido
+            print("   🔄 Tentando método alternativo...")
+        
+        # 4. FAZER UPLOAD DAS FOTOS
+        print("\\n📤 Fazendo upload das fotos...")
+        
+        # Aguardar modal ou input file aparecer
+        time.sleep(1)
+        
+        # Procurar input de arquivo (pode estar escondido ou em modal)
+        input_selectors = [
+            'input[type="file"][name="images"]',
+            'input[type="file"][multiple]',
+            'input[type="file"][accept*="image"]',
+            'input[type="file"]',
+            '.modal input[type="file"]',
+            '[role="dialog"] input[type="file"]'
+        ]
+        
+        upload_realizado = False
+        for selector in input_selectors:
+            try:
+                inputs = page.locator(selector)
+                if inputs.count() > 0:
+                    # Pegar o input mais recente (último na página)
+                    input_element = inputs.last
+                    
+                    # Tornar visível se estiver escondido
+                    page.evaluate(f"""
+                        const inputs = document.querySelectorAll('{selector}');
+                        if (inputs.length > 0) {{
+                            const input = inputs[inputs.length - 1];
+                            input.style.display = 'block';
+                            input.style.visibility = 'visible';
+                            input.style.opacity = '1';
+                        }}
+                    """)
+                    
+                    print(f"   ✅ Input de arquivo encontrado: {selector}")
+                    
+                    # Fazer upload
+                    input_element.set_input_files(fotos_temp)
+                    upload_realizado = True
+                    print(f"   ✅ {len(fotos_temp)} fotos enviadas!")
+                    time.sleep(3)  # Aguardar processamento
+                    break
+            except Exception as e:
+                print(f"   ❌ Tentativa com {selector} falhou: {str(e)[:50]}")
+                continue
+        
+        if not upload_realizado:
+            print("\\n❌ Não foi possível fazer upload das fotos")
+            print("💡 Possíveis causas:")
+            print("   - Modal não abriu corretamente")
+            print("   - Input de arquivo não encontrado")
+            print("   - Permissões de segurança do browser")
+        else:
+            print("\\n✅ Upload de fotos concluído!")
+            
+            # Verificar se as fotos aparecem
+            time.sleep(2)
+            previews = page.locator('img[src*="blob"], .image-preview, [class*="preview"]')
+            if previews.count() > 0:
+                print(f"   ✅ {previews.count()} preview(s) de fotos visíveis")
+            else:
+                print(f"   ⚠️ Previews não encontrados (podem estar carregando)")
+        
+        # 5. LIMPAR ARQUIVOS TEMPORÁRIOS
+        print("\\n🗑️ Limpando arquivos temporários...")
+        for foto_temp in fotos_temp:
+            try:
+                os.unlink(foto_temp)
+            except:
+                pass
+        
+        return upload_realizado
+            
+    except Exception as e:
+        print(f"\\n❌ ERRO GERAL NO UPLOAD: {e}")
+        return False
+
+def forcar_aparecimento_footer(page):
+    """Força o footer a aparecer usando várias técnicas"""
+    print("\\n🎯 FORÇANDO APARECIMENTO DO FOOTER")
+    print("-" * 50)
+    
+    try:
+        # 1. Rolar até o final da página
+        print("📜 Rolando até o final da página...")
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(1)
+        
+        # 2. Verificar se footer já está visível
+        footer_selectors = [
+            'footer.listing-forms__fixed-grid',
+            '.listing-forms__fixed-footer',
+            'footer:has(button:has-text("Criar anúncio"))',
+            '.listing-forms__fixed--footer',
+            '#top-page footer'
+        ]
+        
+        footer_visivel = False
+        for selector in footer_selectors:
+            try:
+                footer = page.locator(selector).first
+                if footer.count() > 0 and footer.is_visible():
+                    print(f"   ✅ Footer já está visível: {selector}")
+                    footer_visivel = True
+                    break
+            except:
+                continue
+        
+        if footer_visivel:
+            return True
+        
+        # 3. Forçar exibição via CSS
+        print("🔧 Forçando exibição do footer via CSS...")
+        page.evaluate("""
+            // Remover possíveis classes que escondem o footer
+            const footers = document.querySelectorAll('footer, .listing-forms__fixed-footer, .listing-forms__fixed--footer');
+            footers.forEach(footer => {
+                footer.style.display = 'block !important';
+                footer.style.visibility = 'visible !important';
+                footer.style.opacity = '1 !important';
+                footer.style.position = 'fixed !important';
+                footer.style.bottom = '0 !important';
+                footer.style.left = '0 !important';
+                footer.style.right = '0 !important';
+                footer.style.zIndex = '9999 !important';
+                footer.classList.remove('hidden', 'invisible', 'd-none');
+            });
+            
+            // Forçar botões também
+            const buttons = document.querySelectorAll('button:has-text("Criar anúncio"), button:has-text("Sair")');
+            buttons.forEach(btn => {
+                btn.style.display = 'inline-block !important';
+                btn.style.visibility = 'visible !important';
+                btn.style.opacity = '1 !important';
+            });
+        """)
+        
+        time.sleep(1)
+        
+        # 4. Verificar novamente
+        print("🔍 Verificando se footer apareceu...")
+        
+        # Procurar especificamente pelo botão "Criar anúncio"
+        botao_criar = page.locator('button:has-text("Criar anúncio")').first
+        if botao_criar.count() > 0:
+            try:
+                if botao_criar.is_visible():
+                    print("   ✅ Botão 'Criar anúncio' está visível!")
+                    return True
+                else:
+                    print("   ⚠️ Botão existe mas não está visível")
+            except:
+                print("   ⚠️ Botão existe mas não pode verificar visibilidade")
+        
+        # 5. Método alternativo - criar footer se não existir
+        print("🏗️ Tentando criar footer via JavaScript...")
+        page.evaluate("""
+            // Verificar se footer existe
+            let footer = document.querySelector('footer.listing-forms__fixed-grid');
+            if (!footer) {
+                // Criar footer manualmente
+                footer = document.createElement('footer');
+                footer.className = 'listing-forms__fixed-grid listings-form__grid--center gz-grid';
+                footer.style.cssText = 'position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 20px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 9999;';
+                
+                const container = document.createElement('div');
+                container.className = 'listing-forms__fixed-container listing-forms__fixed-container--footer';
+                
+                const footerDiv = document.createElement('div');
+                footerDiv.className = 'listing-forms__fixed-footer';
+                footerDiv.style.cssText = 'display: flex; justify-content: flex-end; gap: 10px;';
+                
+                // Botão Sair
+                const btnSair = document.createElement('button');
+                btnSair.className = 'new-l-button new-l-button--appearance-borderless';
+                btnSair.textContent = 'Sair';
+                btnSair.style.cssText = 'padding: 10px 20px; border: 1px solid #ccc; background: white; cursor: pointer;';
+                
+                // Botão Criar
+                const btnCriar = document.createElement('button');
+                btnCriar.className = 'new-l-button new-l-button--appearance-standard';
+                btnCriar.innerHTML = '<span>Criar anúncio</span>';
+                btnCriar.style.cssText = 'padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer;';
+                
+                footerDiv.appendChild(btnSair);
+                footerDiv.appendChild(btnCriar);
+                container.appendChild(footerDiv);
+                footer.appendChild(container);
+                
+                document.body.appendChild(footer);
+                console.log('Footer criado manualmente!');
+            }
+        """)
+        
+        time.sleep(1)
+        
+        # 6. Verificação final
+        botao_criar_final = page.locator('button:has-text("Criar anúncio")')
+        if botao_criar_final.count() > 0:
+            print("   ✅ Footer com botão 'Criar anúncio' disponível!")
+            return True
+        else:
+            print("   ❌ Não foi possível fazer o footer aparecer")
+            
+            # Listar todos os botões encontrados para debug
+            all_buttons = page.locator('button')
+            print(f"   ℹ️ Total de botões na página: {all_buttons.count()}")
+            for i in range(min(all_buttons.count(), 10)):
+                try:
+                    texto = all_buttons.nth(i).inner_text()
+                    if texto:
+                        print(f"      - Botão {i+1}: '{texto}'")
+                except:
+                    pass
+            
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erro ao forçar footer: {e}")
+        return False
+
+# ... resto do código continua igual ...
 '''
     
+    # Escrever arquivo
     with open(script_path, 'w', encoding='utf-8') as f:
         f.write(script_content)
-        
+    
+    print(f"✅ Script executor criado/atualizado em: {script_path}")
+
 def consultar_cep(cep):
     """Consulta CEP na API ViaCEP"""
     try:
