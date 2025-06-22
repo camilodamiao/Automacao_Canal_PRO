@@ -11,7 +11,8 @@ import json
 import sys
 import requests
 import os
-import asyncio
+import subprocess
+import tempfile
 from pathlib import Path
 
 # Adicionar src ao path
@@ -53,47 +54,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def mapear_tipo_imovel(tipo):
-    """Mapeia tipos do scraping para o Canal PRO"""
-    mapeamento = {
-        'Apartamento': 'APARTMENT',
-        'Casa': 'HOME',
-        'Terreno': 'ALLOTMENT_LAND',
-        'Comercial': 'BUILDING'
-    }
-    return mapeamento.get(tipo, 'APARTMENT')
-
-def mapear_iptu_periodo(periodo):
-    """Mapeia período IPTU para o Canal PRO"""
-    if not periodo:
-        return 'YEARLY'
-    if 'Mensal' in str(periodo):
-        return 'MONTHLY'
-    elif 'Anual' in str(periodo):
-        return 'YEARLY'
-    return 'YEARLY'  # Padrão
-
-import subprocess
-import sys
-import json
-import tempfile
-import os
-from pathlib import Path
-
-import subprocess
-import sys
-import json
-import tempfile
-import os
-from pathlib import Path
-
 def executar_teste_canal_pro(dados_completos):
-    """Executa teste usando subprocess separado - VERSÃO CORRIGIDA"""
+    """Executa teste usando subprocess separado - VERSÃO FINAL"""
     try:
         # Validar dados essenciais
         if not dados_completos:
             st.error("❌ Dados não fornecidos para o teste")
             return False
+        
+        # Adicionar fotos aos dados (importante!)
+        imovel_selecionado = st.session_state.get('imovel_selecionado', {})
+        if imovel_selecionado and imovel_selecionado.get('fotos'):
+            # Processar fotos
+            fotos = []
+            fotos_raw = imovel_selecionado['fotos']
+            
+            if isinstance(fotos_raw, str):
+                try:
+                    fotos_data = json.loads(fotos_raw)
+                    if isinstance(fotos_data, list):
+                        fotos = fotos_data
+                except json.JSONDecodeError:
+                    import re
+                    urls = re.findall(r'https?://[^\s,\]"]+', fotos_raw)
+                    fotos = urls
+            elif isinstance(fotos_raw, list):
+                fotos = fotos_raw
+            
+            dados_completos['fotos'] = fotos
         
         # Criar arquivo temporário com os dados
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as temp_file:
@@ -103,14 +91,11 @@ def executar_teste_canal_pro(dados_completos):
         # Caminho do script executor
         script_executor = Path(__file__).parent.parent / "src" / "automation" / "canal_pro_test_executor.py"
         
-        # Se o script não existir, criar
+        # Verificar se o script existe
         if not script_executor.exists():
-            try:
-                criar_script_executor(script_executor)
-                st.info("📝 Script executor criado com sucesso")
-            except Exception as e:
-                st.error(f"❌ Erro ao criar script: {e}")
-                return False
+            st.error(f"❌ Script executor não encontrado em: {script_executor}")
+            st.info("💡 Certifique-se de que o arquivo 'canal_pro_test_executor.py' está em 'src/automation/'")
+            return False
         
         st.info("🚀 Executando teste em processo separado...")
         st.info("📱 Um browser será aberto automaticamente")
@@ -168,8 +153,10 @@ def executar_teste_canal_pro(dados_completos):
                 # Extrair informações importantes do log
                 if "FORMULÁRIO PREENCHIDO COM SUCESSO" in result.stdout:
                     st.success("🎯 **Formulário preenchido corretamente!**")
-                if "LOGIN confirmado" in result.stdout:
+                if "Login confirmado" in result.stdout:
                     st.success("🔐 **Login realizado com sucesso!**")
+                if "fotos enviadas" in result.stdout:
+                    st.success("📸 **Fotos carregadas com sucesso!**")
                 
                 return True
             else:
@@ -225,461 +212,6 @@ def executar_teste_canal_pro(dados_completos):
                 os.unlink(temp_path)
         except:
             pass
-
-def criar_script_executor(script_path):
-    """Cria o script executor CORRIGIDO com upload via botão customizado e footer forçado"""
-    script_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Usar o conteúdo do artifact canal_pro_executor_fixed
-    script_content = '''#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Script executor CORRIGIDO para teste do Canal PRO
-CORREÇÕES: Upload via botão customizado + Forçar aparecimento do footer
-"""
-
-import sys
-import json
-import os
-import time
-import requests
-import tempfile
-from pathlib import Path
-
-# Configurar encoding para Windows
-if sys.platform.startswith('win'):
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    print("ERRO: Playwright não instalado. Execute: pip install playwright")
-    sys.exit(1)
-
-# Adicionar src ao path
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-# Carregar variáveis de ambiente
-try:
-    from dotenv import load_dotenv
-    load_dotenv('config/.env')
-except ImportError:
-    print("AVISO: python-dotenv não encontrado. Configure as variáveis manualmente.")
-
-def mapear_tipo_imovel(tipo):
-    """Mapeia tipos do scraping para o Canal PRO"""
-    mapeamento = {
-        'Apartamento': 'APARTMENT',
-        'Casa': 'HOME',
-        'Terreno': 'ALLOTMENT_LAND',
-        'Comercial': 'BUILDING'
-    }
-    return mapeamento.get(tipo, 'APARTMENT')
-
-def mapear_iptu_periodo(periodo):
-    """Mapeia período IPTU para o Canal PRO"""
-    if not periodo:
-        return 'YEARLY'
-    if 'Mensal' in str(periodo):
-        return 'MONTHLY'
-    elif 'Anual' in str(periodo):
-        return 'YEARLY'
-    return 'YEARLY'
-
-def verificar_estado_switch_inteligente(page, seletores_grupo, nome_campo):
-    """Verifica estado de switches problemáticos antes de clicar"""
-    try:
-        print(f"🔍 Verificando estado do {nome_campo}...")
-        
-        for seletor in seletores_grupo:
-            try:
-                element = page.locator(seletor)
-                if element.count() > 0 and element.first.is_visible():
-                    # Verificar se já está selecionado via classes ou atributos
-                    classes = element.first.get_attribute("class") or ""
-                    if any(cls in classes.lower() for cls in ["active", "selected", "checked"]):
-                        print(f"   ✅ {nome_campo} já está selecionado")
-                        return True
-                    
-                    # Se não está selecionado, clicar
-                    element.first.click()
-                    time.sleep(0.5)
-                    print(f"   ✅ {nome_campo} clicado com sucesso")
-                    return True
-            except:
-                continue
-        
-        print(f"   ℹ️ {nome_campo} - assumindo estado padrão correto")
-        return True
-            
-    except Exception as e:
-        print(f"   ℹ️ {nome_campo} - continuando (erro: {str(e)[:50]})")
-        return True
-
-def preencher_campo_simples(page, seletor, valor, nome_campo, tipo="input"):
-    """Preenche campos simples do formulário"""
-    try:
-        print(f"📝 Preenchendo {nome_campo}: {valor}")
-        
-        element = page.locator(seletor)
-        element.wait_for(state="visible", timeout=10000)
-        
-        if tipo == "select":
-            element.select_option(str(valor))
-        elif tipo == "click":
-            element.click()
-        else:
-            element.clear()
-            element.fill(str(valor))
-        
-        print(f"   ✅ {nome_campo} preenchido")
-        time.sleep(0.3)
-        return True
-        
-    except Exception as e:
-        print(f"   ❌ Erro ao preencher {nome_campo}: {str(e)[:100]}")
-        return False
-
-def fazer_upload_fotos_corrigido(page, fotos_urls):
-    """Upload de fotos via botão customizado do Canal PRO"""
-    if not fotos_urls or len(fotos_urls) == 0:
-        print("📸 Nenhuma foto para upload")
-        return False
-    
-    print(f"\\n📸 INICIANDO UPLOAD DE {len(fotos_urls)} FOTOS")
-    print("-" * 50)
-    
-    try:
-        # 1. BAIXAR FOTOS TEMPORARIAMENTE
-        print("📥 Baixando fotos do Supabase...")
-        fotos_temp = []
-        
-        for i, url in enumerate(fotos_urls[:8], 1):  # Máximo 8 fotos
-            try:
-                print(f"   📥 Baixando foto {i}/{min(len(fotos_urls), 8)}...")
-                
-                response = requests.get(url, timeout=30, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                })
-                response.raise_for_status()
-                
-                if len(response.content) < 1000:
-                    print(f"   ⚠️ Foto {i} muito pequena, pulando...")
-                    continue
-                
-                # Salvar temporariamente
-                with tempfile.NamedTemporaryFile(suffix=f'_foto_{i}.jpg', delete=False) as temp_file:
-                    temp_file.write(response.content)
-                    temp_path = temp_file.name
-                
-                fotos_temp.append(temp_path)
-                print(f"   ✅ Foto {i} baixada ({len(response.content):,} bytes)")
-                
-            except Exception as e:
-                print(f"   ❌ Erro ao baixar foto {i}: {str(e)[:50]}")
-                continue
-        
-        if not fotos_temp:
-            print("❌ Nenhuma foto foi baixada com sucesso")
-            return False
-        
-        print(f"\\n✅ {len(fotos_temp)} fotos prontas para upload")
-        
-        # 2. ROLAR ATÉ A SEÇÃO DE FOTOS
-        print("\\n📜 Navegando até seção de fotos...")
-        
-        # Tentar encontrar a seção de imagens primeiro
-        try:
-            # Procurar pela seção de imagens
-            secao_imagens = page.locator('#listing-detail-images, .listing-detail-images, [class*="image"]').first
-            if secao_imagens.count() > 0:
-                secao_imagens.scroll_into_view_if_needed()
-                print("   ✅ Seção de imagens encontrada")
-                time.sleep(1)
-            else:
-                # Se não encontrar, rolar até o final
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.8);")
-                time.sleep(1)
-        except:
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.8);")
-            time.sleep(1)
-        
-        # 3. CLICAR NO BOTÃO "ADICIONAR FOTOS"
-        print("\\n🖱️ Procurando botão 'Adicionar fotos'...")
-        
-        # Seletores do botão customizado
-        botao_selectors = [
-            'button:has-text("Adicionar fotos")',
-            '.listing-detail-images__display-box-inner__button',
-            '#listing-detail-images button',
-            'button.new-l-button:has-text("Adicionar")',
-            'button[class*="listing-detail-images"]',
-            'button:has(svg):has-text("Adicionar")'
-        ]
-        
-        botao_clicado = False
-        for selector in botao_selectors:
-            try:
-                botao = page.locator(selector).first
-                if botao.count() > 0 and botao.is_visible():
-                    print(f"   ✅ Botão encontrado: {selector}")
-                    
-                    # Destacar o botão antes de clicar
-                    page.evaluate(f"""
-                        const btn = document.querySelector('{selector}');
-                        if (btn) {{
-                            btn.style.border = '3px solid red';
-                            btn.style.backgroundColor = 'yellow';
-                        }}
-                    """)
-                    
-                    time.sleep(0.5)
-                    botao.click()
-                    botao_clicado = True
-                    print("   ✅ Botão 'Adicionar fotos' clicado!")
-                    time.sleep(1)
-                    break
-            except Exception as e:
-                print(f"   ❌ Tentativa com {selector} falhou: {str(e)[:50]}")
-                continue
-        
-        if not botao_clicado:
-            print("   ❌ Não foi possível clicar no botão 'Adicionar fotos'")
-            # Tentar método alternativo - procurar input file escondido
-            print("   🔄 Tentando método alternativo...")
-        
-        # 4. FAZER UPLOAD DAS FOTOS
-        print("\\n📤 Fazendo upload das fotos...")
-        
-        # Aguardar modal ou input file aparecer
-        time.sleep(1)
-        
-        # Procurar input de arquivo (pode estar escondido ou em modal)
-        input_selectors = [
-            'input[type="file"][name="images"]',
-            'input[type="file"][multiple]',
-            'input[type="file"][accept*="image"]',
-            'input[type="file"]',
-            '.modal input[type="file"]',
-            '[role="dialog"] input[type="file"]'
-        ]
-        
-        upload_realizado = False
-        for selector in input_selectors:
-            try:
-                inputs = page.locator(selector)
-                if inputs.count() > 0:
-                    # Pegar o input mais recente (último na página)
-                    input_element = inputs.last
-                    
-                    # Tornar visível se estiver escondido
-                    page.evaluate(f"""
-                        const inputs = document.querySelectorAll('{selector}');
-                        if (inputs.length > 0) {{
-                            const input = inputs[inputs.length - 1];
-                            input.style.display = 'block';
-                            input.style.visibility = 'visible';
-                            input.style.opacity = '1';
-                        }}
-                    """)
-                    
-                    print(f"   ✅ Input de arquivo encontrado: {selector}")
-                    
-                    # Fazer upload
-                    input_element.set_input_files(fotos_temp)
-                    upload_realizado = True
-                    print(f"   ✅ {len(fotos_temp)} fotos enviadas!")
-                    time.sleep(3)  # Aguardar processamento
-                    break
-            except Exception as e:
-                print(f"   ❌ Tentativa com {selector} falhou: {str(e)[:50]}")
-                continue
-        
-        if not upload_realizado:
-            print("\\n❌ Não foi possível fazer upload das fotos")
-            print("💡 Possíveis causas:")
-            print("   - Modal não abriu corretamente")
-            print("   - Input de arquivo não encontrado")
-            print("   - Permissões de segurança do browser")
-        else:
-            print("\\n✅ Upload de fotos concluído!")
-            
-            # Verificar se as fotos aparecem
-            time.sleep(2)
-            previews = page.locator('img[src*="blob"], .image-preview, [class*="preview"]')
-            if previews.count() > 0:
-                print(f"   ✅ {previews.count()} preview(s) de fotos visíveis")
-            else:
-                print(f"   ⚠️ Previews não encontrados (podem estar carregando)")
-        
-        # 5. LIMPAR ARQUIVOS TEMPORÁRIOS
-        print("\\n🗑️ Limpando arquivos temporários...")
-        for foto_temp in fotos_temp:
-            try:
-                os.unlink(foto_temp)
-            except:
-                pass
-        
-        return upload_realizado
-            
-    except Exception as e:
-        print(f"\\n❌ ERRO GERAL NO UPLOAD: {e}")
-        return False
-
-def forcar_aparecimento_footer(page):
-    """Força o footer a aparecer usando várias técnicas"""
-    print("\\n🎯 FORÇANDO APARECIMENTO DO FOOTER")
-    print("-" * 50)
-    
-    try:
-        # 1. Rolar até o final da página
-        print("📜 Rolando até o final da página...")
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1)
-        
-        # 2. Verificar se footer já está visível
-        footer_selectors = [
-            'footer.listing-forms__fixed-grid',
-            '.listing-forms__fixed-footer',
-            'footer:has(button:has-text("Criar anúncio"))',
-            '.listing-forms__fixed--footer',
-            '#top-page footer'
-        ]
-        
-        footer_visivel = False
-        for selector in footer_selectors:
-            try:
-                footer = page.locator(selector).first
-                if footer.count() > 0 and footer.is_visible():
-                    print(f"   ✅ Footer já está visível: {selector}")
-                    footer_visivel = True
-                    break
-            except:
-                continue
-        
-        if footer_visivel:
-            return True
-        
-        # 3. Forçar exibição via CSS
-        print("🔧 Forçando exibição do footer via CSS...")
-        page.evaluate("""
-            // Remover possíveis classes que escondem o footer
-            const footers = document.querySelectorAll('footer, .listing-forms__fixed-footer, .listing-forms__fixed--footer');
-            footers.forEach(footer => {
-                footer.style.display = 'block !important';
-                footer.style.visibility = 'visible !important';
-                footer.style.opacity = '1 !important';
-                footer.style.position = 'fixed !important';
-                footer.style.bottom = '0 !important';
-                footer.style.left = '0 !important';
-                footer.style.right = '0 !important';
-                footer.style.zIndex = '9999 !important';
-                footer.classList.remove('hidden', 'invisible', 'd-none');
-            });
-            
-            // Forçar botões também
-            const buttons = document.querySelectorAll('button:has-text("Criar anúncio"), button:has-text("Sair")');
-            buttons.forEach(btn => {
-                btn.style.display = 'inline-block !important';
-                btn.style.visibility = 'visible !important';
-                btn.style.opacity = '1 !important';
-            });
-        """)
-        
-        time.sleep(1)
-        
-        # 4. Verificar novamente
-        print("🔍 Verificando se footer apareceu...")
-        
-        # Procurar especificamente pelo botão "Criar anúncio"
-        botao_criar = page.locator('button:has-text("Criar anúncio")').first
-        if botao_criar.count() > 0:
-            try:
-                if botao_criar.is_visible():
-                    print("   ✅ Botão 'Criar anúncio' está visível!")
-                    return True
-                else:
-                    print("   ⚠️ Botão existe mas não está visível")
-            except:
-                print("   ⚠️ Botão existe mas não pode verificar visibilidade")
-        
-        # 5. Método alternativo - criar footer se não existir
-        print("🏗️ Tentando criar footer via JavaScript...")
-        page.evaluate("""
-            // Verificar se footer existe
-            let footer = document.querySelector('footer.listing-forms__fixed-grid');
-            if (!footer) {
-                // Criar footer manualmente
-                footer = document.createElement('footer');
-                footer.className = 'listing-forms__fixed-grid listings-form__grid--center gz-grid';
-                footer.style.cssText = 'position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 20px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 9999;';
-                
-                const container = document.createElement('div');
-                container.className = 'listing-forms__fixed-container listing-forms__fixed-container--footer';
-                
-                const footerDiv = document.createElement('div');
-                footerDiv.className = 'listing-forms__fixed-footer';
-                footerDiv.style.cssText = 'display: flex; justify-content: flex-end; gap: 10px;';
-                
-                // Botão Sair
-                const btnSair = document.createElement('button');
-                btnSair.className = 'new-l-button new-l-button--appearance-borderless';
-                btnSair.textContent = 'Sair';
-                btnSair.style.cssText = 'padding: 10px 20px; border: 1px solid #ccc; background: white; cursor: pointer;';
-                
-                // Botão Criar
-                const btnCriar = document.createElement('button');
-                btnCriar.className = 'new-l-button new-l-button--appearance-standard';
-                btnCriar.innerHTML = '<span>Criar anúncio</span>';
-                btnCriar.style.cssText = 'padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer;';
-                
-                footerDiv.appendChild(btnSair);
-                footerDiv.appendChild(btnCriar);
-                container.appendChild(footerDiv);
-                footer.appendChild(container);
-                
-                document.body.appendChild(footer);
-                console.log('Footer criado manualmente!');
-            }
-        """)
-        
-        time.sleep(1)
-        
-        # 6. Verificação final
-        botao_criar_final = page.locator('button:has-text("Criar anúncio")')
-        if botao_criar_final.count() > 0:
-            print("   ✅ Footer com botão 'Criar anúncio' disponível!")
-            return True
-        else:
-            print("   ❌ Não foi possível fazer o footer aparecer")
-            
-            # Listar todos os botões encontrados para debug
-            all_buttons = page.locator('button')
-            print(f"   ℹ️ Total de botões na página: {all_buttons.count()}")
-            for i in range(min(all_buttons.count(), 10)):
-                try:
-                    texto = all_buttons.nth(i).inner_text()
-                    if texto:
-                        print(f"      - Botão {i+1}: '{texto}'")
-                except:
-                    pass
-            
-            return False
-            
-    except Exception as e:
-        print(f"❌ Erro ao forçar footer: {e}")
-        return False
-
-# ... resto do código continua igual ...
-'''
-    
-    # Escrever arquivo
-    with open(script_path, 'w', encoding='utf-8') as f:
-        f.write(script_content)
-    
-    print(f"✅ Script executor criado/atualizado em: {script_path}")
 
 def consultar_cep(cep):
     """Consulta CEP na API ViaCEP"""
@@ -889,6 +421,9 @@ imovel_selecionado = next((i for i in imoveis if i['codigo'] == codigo_seleciona
 if not imovel_selecionado:
     st.error("Erro ao carregar dados do imóvel selecionado")
     st.stop()
+
+# Salvar imóvel selecionado no session state para uso no teste
+st.session_state['imovel_selecionado'] = imovel_selecionado
 
 # Verificar se tem anúncio
 anuncio_data = {}
@@ -1284,7 +819,7 @@ with col4:
         help="Funcionalidade em desenvolvimento"
     )
 
-# CORREÇÃO PRINCIPAL: Conectar o botão "Testar Canal PRO" à função
+# Processar clique no botão "Testar Canal PRO"
 if testar_canal_pro:
     if porcentagem >= 100:
         # Montar dados completos para o teste
@@ -1321,24 +856,18 @@ if testar_canal_pro:
             'modo_exibicao_endereco': modo_exibicao_endereco,
         }
         
-        st.info("🚀 Iniciando teste do Canal PRO...")
-        st.info("📱 Um browser será aberto automaticamente")
-        st.warning("⚠️ **IMPORTANTE: Este é apenas um TESTE! NÃO publique o anúncio!**")
-        
         # Executar o teste
-        with st.spinner("🔄 Executando teste no Canal PRO..."):
-            sucesso = executar_teste_canal_pro(dados_completos)
-            
-            if sucesso:
-                st.success("✅ Teste do Canal PRO concluído!")
-                st.info("🔍 Verifique se todos os campos foram preenchidos corretamente no browser.")
-                st.info("📝 Anote quaisquer problemas encontrados.")
-            else:
-                st.error("❌ Erro durante o teste do Canal PRO.")
-                st.error("🔧 Verifique os logs acima para mais detalhes.")
+        sucesso = executar_teste_canal_pro(dados_completos)
+        
+        if sucesso:
+            st.success("✅ Teste do Canal PRO concluído com sucesso!")
+            st.balloons()
+        else:
+            st.error("❌ O teste encontrou problemas. Verifique os logs acima.")
     else:
         st.error("❌ Complete todos os campos obrigatórios antes de testar no Canal PRO.")
-        st.info("💡 Você precisa preencher: CEP, Endereço, Bairro, Número e ter pelo menos 3 fotos.")
+        campos_faltando = [campo for campo, completo in campos_obrigatorios.items() if not completo]
+        st.info(f"💡 Campos faltando: {', '.join(campos_faltando)}")
 
 # Processar submissão dos outros botões (salvar)
 if salvar_rascunho or salvar_completo:
